@@ -1,0 +1,194 @@
+#pragma once
+#ifndef EMULATOR_INPUT_ICC_
+#define EMULATOR_INPUT_ICC_
+
+#include "input/gamepad_device.h"
+
+namespace sen {
+void UmidoKey::initialize() {
+  umido_key_device_ = open("/dev/umidokey", O_RDONLY);
+  if (umido_key_device_ <= 0) {
+    ZGS_LOG("Cann't open the umido key device");
+  }
+}
+void UmidoKey::terminate() {
+  if (umido_key_device_ > 0) {
+    close(umido_key_device_);
+    umido_key_device_ = -1;
+  }
+}
+void UmidoKey::readInput() {
+  if (umido_key_device_ > 0) {
+    read(umido_key_device_, &p1_p2_keys_, sizeof(uint32_t));
+  } else {
+    // initialize();
+  }
+}
+InputDevice::KeyMapping UmidoKey::getKeyMapping(uint16_t key) {
+  switch (KeyMapping(key)) {
+    case KeyMapping::UK_UP: return InputDevice::KeyMapping::UP;
+    case KeyMapping::UK_DOWN: return InputDevice::KeyMapping::DOWN;
+    case KeyMapping::UK_LEFT: return InputDevice::KeyMapping::LEFT;
+    case KeyMapping::UK_RIGHT: return InputDevice::KeyMapping::RIGHT;
+    case KeyMapping::UK_START: return InputDevice::KeyMapping::START;
+    case KeyMapping::UK_A: return InputDevice::KeyMapping::BTN_1;
+    case KeyMapping::UK_B: return InputDevice::KeyMapping::BTN_2;
+    case KeyMapping::UK_C: return InputDevice::KeyMapping::BTN_3;
+    case KeyMapping::UK_X: return InputDevice::KeyMapping::BTN_4;
+    case KeyMapping::UK_Y: return InputDevice::KeyMapping::BTN_5;
+    case KeyMapping::UK_Z: return InputDevice::KeyMapping::BTN_6;
+  }
+
+  return InputDevice::KeyMapping::UNKNOWN;
+}
+
+#ifdef USE_SDL
+uint16_t SDLKey::keys_[4];
+
+#define updateKey(i, src_key, dst_key) \
+  case src_key: keys_[i] = key_event.type == SDL_KEYDOWN ? (keys_[i] | uint16_t(KeyMapping::dst_key)) : (keys_[i] & ~uint16_t(KeyMapping::dst_key)); break
+void SDLKey::updateSDLKey(SDL_KeyboardEvent key_event) {
+  if (key_event.repeat == 0) {
+    switch (key_event.keysym.scancode) {
+      updateKey(0, SDL_SCANCODE_W, SDL_UP);
+      updateKey(0, SDL_SCANCODE_S, SDL_DOWN);
+      updateKey(0, SDL_SCANCODE_A, SDL_LEFT);
+      updateKey(0, SDL_SCANCODE_D, SDL_RIGHT);
+      updateKey(0, SDL_SCANCODE_RETURN, SDL_START);
+      updateKey(0, SDL_SCANCODE_J, SDL_X);
+      updateKey(0, SDL_SCANCODE_K, SDL_Y);
+      updateKey(0, SDL_SCANCODE_L, SDL_Z);
+      updateKey(0, SDL_SCANCODE_U, SDL_A);
+      updateKey(0, SDL_SCANCODE_I, SDL_B);
+      updateKey(0, SDL_SCANCODE_O, SDL_C);
+
+      updateKey(1, SDL_SCANCODE_UP, SDL_UP);
+      updateKey(1, SDL_SCANCODE_DOWN, SDL_DOWN);
+      updateKey(1, SDL_SCANCODE_LEFT, SDL_LEFT);
+      updateKey(1, SDL_SCANCODE_RIGHT, SDL_RIGHT);
+      updateKey(1, SDL_SCANCODE_KP_ENTER, SDL_START);
+      updateKey(1, SDL_SCANCODE_KP_1, SDL_X);
+      updateKey(1, SDL_SCANCODE_KP_2, SDL_Y);
+      updateKey(1, SDL_SCANCODE_KP_3, SDL_Z);
+      updateKey(1, SDL_SCANCODE_KP_4, SDL_A);
+      updateKey(1, SDL_SCANCODE_KP_5, SDL_B);
+      updateKey(1, SDL_SCANCODE_KP_6, SDL_C);
+
+      default:
+        break;
+    }
+  }
+}
+#undef updateKey
+
+InputDevice::KeyMapping SDLKey::getKeyMapping(uint16_t key) {
+  switch (KeyMapping(key)) {
+    case KeyMapping::SDL_UP: return InputDevice::KeyMapping::UP;
+    case KeyMapping::SDL_DOWN: return InputDevice::KeyMapping::DOWN;
+    case KeyMapping::SDL_LEFT: return InputDevice::KeyMapping::LEFT;
+    case KeyMapping::SDL_RIGHT: return InputDevice::KeyMapping::RIGHT;
+    case KeyMapping::SDL_START: return InputDevice::KeyMapping::START;
+    case KeyMapping::SDL_A: return InputDevice::KeyMapping::BTN_1;
+    case KeyMapping::SDL_B: return InputDevice::KeyMapping::BTN_2;
+    case KeyMapping::SDL_C: return InputDevice::KeyMapping::BTN_3;
+    case KeyMapping::SDL_X: return InputDevice::KeyMapping::BTN_4;
+    case KeyMapping::SDL_Y: return InputDevice::KeyMapping::BTN_5;
+    case KeyMapping::SDL_Z: return InputDevice::KeyMapping::BTN_6;
+  }
+
+  return InputDevice::KeyMapping::UNKNOWN;
+}
+#endif
+
+#define update(src_key, dst_key) \
+  case InputDevice::KeyMapping::src_key: kcode[i] = (inputs[i] & mask) ? kcode[i] & ~(dst_key) : kcode[i] | (dst_key); break
+#define updateOne(src_key, dst_key) \
+  case InputDevice::KeyMapping::src_key: kcode[port] = (keys & mask) ? kcode[port] & ~(dst_key) : kcode[port] | (dst_key); break
+
+void Emulator::updateInput(uint16_t p1keys, uint16_t p2keys, uint16_t p3keys, uint16_t p4keys) {
+  static auto begin = std::chrono::steady_clock::now();
+  static bool press_2p_start = false;
+  uint16_t inputs[4] = {p1keys, p2keys, p3keys, p4keys};
+  uint16_t changes[4];
+
+  // LOG_IF(INFO, p1keys || p2keys) << "P1Key" << frame_counter_ << std::hex << std::showbase << p1keys;
+  // LOG_IF(INFO, p1keys || p2keys) << "P2Key" << frame_counter_ << std::hex << std::showbase << p2keys;
+
+  for (int i = 0; i < 4; ++i) {
+    changes[i] = inputs[i] ^ prev_keys_[i];
+    prev_keys_[i] = inputs[i];
+  }
+
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 16; ++j) {
+      int mask = 1 << j;
+      if (changes[i] & mask) {
+        switch (InputDevice::KeyMapping(input_device_->getKeyMapping(mask))) {
+          update(   UP, DC_DPAD_UP);
+          update( DOWN, DC_DPAD_DOWN);
+          update( LEFT, DC_DPAD_LEFT);
+          update(RIGHT, DC_DPAD_RIGHT);
+          update(START, DC_BTN_START);
+          update(BTN_1, DC_BTN_A);
+          update(BTN_2, DC_BTN_B);
+          update(BTN_3, DC_BTN_C);
+          update(BTN_4, DC_BTN_X);
+          update(BTN_5, DC_BTN_Y);
+          update(BTN_6, DC_BTN_Z);
+          case InputDevice::KeyMapping::UNKNOWN:break;
+        }
+      }
+    }
+  }
+
+  if (kHostFlag == SINGLEPLAYER) {
+    if (~kcode[1] == DC_BTN_START && ~kcode[0] == 0) {
+      if (!press_2p_start) {
+        press_2p_start = true;
+        begin = std::chrono::steady_clock::now();
+      } else {
+        auto second_time = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - begin).count();
+        if (second_time >= 5) {
+          press_2p_start = false;
+          begin = std::chrono::steady_clock::now();
+          emu.stop();
+          loadLocalState();
+          emu.start();
+        }
+      }
+    } else if (press_2p_start) {
+      press_2p_start = false;
+    }
+  }
+}
+void Emulator::updateOneInput(uint16_t keys, int port) {
+  uint16_t changes = keys ^ prev_keys_[port];
+  prev_keys_[port] = keys;
+
+  for (int i = 0; i < 16; ++i) {
+    int mask = 1 << i;
+    if (changes & mask) {
+      switch (InputDevice::KeyMapping(input_device_->getKeyMapping(mask))) {
+        updateOne(   UP, DC_DPAD_UP);
+        updateOne( DOWN, DC_DPAD_DOWN);
+        updateOne( LEFT, DC_DPAD_LEFT);
+        updateOne(RIGHT, DC_DPAD_RIGHT);
+        updateOne(START, DC_BTN_START);
+        updateOne(BTN_1, DC_BTN_A);
+        updateOne(BTN_2, DC_BTN_B);
+        updateOne(BTN_3, DC_BTN_C);
+        updateOne(BTN_4, DC_BTN_X);
+        updateOne(BTN_5, DC_BTN_Y);
+        updateOne(BTN_6, DC_BTN_Z);
+        case InputDevice::KeyMapping::UNKNOWN:break;
+      }
+    }
+  }
+}
+
+#undef updateOne
+#undef update
+
+}// namespace sen
+
+#endif//EMULATOR_INPUT_ICC_

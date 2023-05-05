@@ -1,0 +1,12 @@
+build/
+
+# macOS
+.DS_Store
+
+# Visual Studio
+.vs/
+out/
+
+# JetBrains IDES
+.idea/
+cmake-build-*/

@@ -1,0 +1,187 @@
+#pragma once
+#ifndef HISCORE_ICC_
+#define HISCORE_ICC_
+
+#include <iomanip>
+
+namespace sen {
+
+/*
+ * $00 = ryu        $01 = zangief       $02 = guile        $03 = morrigan
+ * $04 = anakaris   $05 = strider       $06 = cyclops      $07 = wolverine
+ * $08 = psylocke   $09 = sliver surfer $0a = rogue        $0b = captain america
+ * $0c = spider man $0d = hulk          $0e = venom        $0f = doctor doom
+ * $10 = tron bonne $11 = jill          $12 = hayato       $13 = ruby heart
+ * $14 = son son    $15 = amingo        $16 = marrow       $17 = cable
+ * $18 = none       $19 = none          $1a = none         $1b = chun-li
+ * $1c = mega man   $1d = roll          $1e = akuma        $1f = bulleta
+ * $20 = felicia    $21 = charlie nash  $22 = sakura       $23 = dan
+ * $24 = cammy      $25 = dhalsim       $26 = m.bison      $27 = ken
+ * $28 = gambit     $29 = juggernaut    $2a = storm        $2b = sabretooth
+ * $2c = magneto    $2d = Shuma-gorath  $2e = war marchine $2f = sliver samurai
+ * $30 = omega red  $31 = spiral        $32 = colossus     $33 = iron man
+ * $34 = sentinel   $35 = blackheart    $36 = thanos       $37 = jin
+ * $38 = captain commando
+ * $39 = wolverine bone claw
+ * $3a = kobun(Servbot)
+ */
+
+/*
+ * 0: rank
+ * 1-3: ch1-3
+ * 4-7: ?
+ * 8: win times
+ * 9-11: ?
+ * 12-16: name
+ * 17-24: score
+ */
+static bool checkChar(uint8_t c) {
+  if (c >= 0x3b || c == 0x18 || c == 0x19 || c == 0x1a)
+    return false;
+  else
+    return true;
+}
+bool checkScore(uint8_t *data) {
+  if (data[0] == 0x00 || data[0] >= 0x16) return false;
+  if (!checkChar(data[1])) { return false; }
+  if (!checkChar(data[2])) { return false; }
+  if (!checkChar(data[3])) { return false; }
+  if (data[1] == data[2] || data[1] == data[3] || data[2] == data[3]) return false;
+
+  return true;
+}
+
+void HighScore::initialize() {
+  is_read = false;
+  std::string hiscore_file = hostfs::getArcadeFlashPath() + ".hiscore";
+  FILE *f = nowide::fopen(hiscore_file.c_str(), "rb");
+  if (f) {
+    if (std::fread(file_scores.data(), 1, file_scores.size() * sizeof(uint64_t), f) != file_scores.size() * sizeof(uint64_t)) {
+      ZGS_LOG("Failed or truncated read of HISCORE '%s', using default HISCORE data", hiscore_file.c_str());
+      memcpy(file_scores.data(), default_scores.data(), file_scores.size() * sizeof(uint64_t));
+    } else {
+      ZGS_LOG("Loaded HISCORE from %s", hiscore_file.c_str());
+      for (int i = 0, end = file_scores.size() / 3; i < end; ++i) {
+        if (!checkScore(reinterpret_cast<uint8_t*>(file_scores.data()) + 24 * i)) {
+          ZGS_LOG("HISCORE file is corrupted, using default HISCORE data");
+          memcpy(file_scores.data(), default_scores.data(), file_scores.size() * sizeof(uint64_t));
+          break;
+        }
+      }
+    }
+    std::fclose(f);
+  } else {
+    ZGS_LOG("Using default HISCORE file");
+    memcpy(file_scores.data(), default_scores.data(), file_scores.size() * sizeof(uint64_t));
+  }
+}
+void HighScore::terminate() {
+  if (is_read) {
+    readScores();
+    writeScores();
+  }
+}
+void HighScore::readScores() {
+  uint32_t addr = 0x0c2f8688;
+  for (int i = 0; i < scores.size(); ++i, addr += 0x08) {
+    scores[i] = ReadMem64(addr);
+  }
+}
+void HighScore::writeScores() {
+  std::string hiscore_file = hostfs::getArcadeFlashPath() + ".hiscore";
+  FILE *f = nowide::fopen(hiscore_file.c_str(), "wb");
+  if (f) {
+    std::fwrite(scores.data(), 1, scores.size() * sizeof(uint64_t), f);
+    sync();
+    std::fclose(f);
+    ZGS_LOG("Saved HISCORE to %s", hiscore_file.c_str());
+  } else {
+    ZGS_LOG("HISCORE SAVE FAILED to %s", hiscore_file.c_str());
+  }
+}
+void HighScore::updateScores() {
+  if (!is_read) {
+    uint32_t addr = 0x0c2f8688;
+    int i = 0;
+    for (i = 0; i < scores.size(); ++i, addr += 0x08) {
+      scores[i] = ReadMem64(addr);
+      if (scores[i] != default_scores[i]) {
+        break;
+      }
+    }
+
+    if (i == scores.size()) {
+      is_read = true;
+      ZGS_LOG("Scores: loaded");
+      addr = 0x0c2f8688;
+      for (i = 0; i < file_scores.size(); ++i, addr += 0x08) {
+        WriteMem64(addr, file_scores[i]);
+      }
+    }
+  } else {
+    bool changes{false};
+    readScores();
+    for (int i = 0; i < scores.size(); ++i) {
+      if (scores[i] != file_scores[i]) {
+        changes = true;
+        break;
+      }
+    }
+    if (changes) {
+      writeScores();
+      std::copy(scores.begin(), scores.end(), file_scores.begin());
+    }
+  }
+}
+
+HighScore highScore;
+
+std::array<uint64_t, 126> HighScore::default_scores = {
+    0x0002010000131701, 0x29080d0e00000a0a, 0x0000000200000000,
+    0x0002010002141602, 0x2903000a000a0a09, 0x0000000190000000,
+    0x0002010001150f03, 0x29030b1300140a08, 0x0000000180000000,
+    0x0002010005120904, 0x29020007001e0a07, 0x0000000170000000,
+    0x0002010022110805, 0x290c0e1300280a06, 0x0000000160000000,
+    0x0002010004100a06, 0x29110d0c00320a05, 0x0000000150000000,
+    0x0002010002120707, 0x29140e1800000b04, 0x0000000140000000,
+    0x0002010005140c08, 0x29130e0c00000c03, 0x0000000130000000,
+    0x0002010004150e09, 0x290a141800000d02, 0x0000000120000000,
+    0x0002010001150d0a, 0x290f0f1200000e02, 0x0000000110000000,
+    0x000201000616170b, 0x2900110a00000f02, 0x0000000100000000,
+    0x000201001310110c, 0x2908000300001002, 0x0000000090000000,
+    0x000201000a080b0d, 0x290a0e1800001102, 0x0000000080000000,
+    0x000201001215140e, 0x29190e0a00001202, 0x0000000070000000,
+    0x0002010009070f0f, 0x2912080d00001302, 0x0000000060000000,
+    0x0002010002052210, 0x2913130800001402, 0x0000000050000000,
+    0x000201000e0d0c11, 0x29060e1200001502, 0x0000000040000000,
+    0x0002010004010012, 0x290d001600001602, 0x0000000030000000,
+    0x000201000f161713, 0x291c210300001702, 0x0000000020000000,
+    0x0002010002010014, 0x2905040300001802, 0x0000000010000000,
+    0x0002010014151315, 0x290f000200006300, 0x0000000000000000,
+
+    0x0002010000131701, 0x29080d0e00000a0a, 0x0000000200000000,
+    0x0002010002141602, 0x29080003000a0a09, 0x0000000190000000,
+    0x0002010001150f03, 0x29130e0c00140a08, 0x0000000180000000,
+    0x0002010005120904, 0x29020007001e0a07, 0x0000000170000000,
+    0x0002010022110805, 0x2900110a00280a06, 0x0000000160000000,
+    0x0002010004100a06, 0x29110d0c00320a05, 0x0000000150000000,
+    0x0002010002120707, 0x29140e1800000b04, 0x0000000140000000,
+    0x0002010005140c08, 0x290f0f1200000c03, 0x0000000130000000,
+    0x0002010004150e09, 0x29030b1300000d02, 0x0000000120000000,
+    0x0002010001150d0a, 0x29190e0a00000e02, 0x0000000110000000,
+    0x000201000616170b, 0x2903000a00000f02, 0x0000000100000000,
+    0x000201001310110c, 0x290d001600001002, 0x0000000090000000,
+    0x000201000a080b0d, 0x290a141800001102, 0x0000000080000000,
+    0x000201001215140e, 0x29060e1200001202, 0x0000000070000000,
+    0x0002010009070f0f, 0x2912080d00001302, 0x0000000060000000,
+    0x0002010002052210, 0x29030a0700001402, 0x0000000050000000,
+    0x000201000e0d0c11, 0x290a0e1800001502, 0x0000000040000000,
+    0x0002010004010012, 0x2913130800001602, 0x0000000030000000,
+    0x000201000f161713, 0x291c210300001702, 0x0000000020000000,
+    0x0002010002010014, 0x2905040300001802, 0x0000000010000000,
+    0x0002010014151315, 0x290f000200006300, 0x0000000000000000,
+};
+
+}
+
+#endif //HISCORE_ICC_
